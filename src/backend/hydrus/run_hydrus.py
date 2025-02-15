@@ -3,79 +3,63 @@ import os
 import time
 import sys
 import ctypes
+import json
+import matplotlib.pyplot as plt
 
-HYDRUS_DIR = os.path.abspath(os.path.dirname(__file__))  # Backend/hydrus directory
-PROJECT_DIR = os.path.join(HYDRUS_DIR, "Projects")  # Force HYDRUS to save here
+# Set directories and paths
+HYDRUS_DIR = os.path.abspath(os.path.dirname(__file__))
+PROJECTS_DIR = os.path.join(HYDRUS_DIR, "Projects")
 hydrus_exe_path = os.path.join(HYDRUS_DIR, "HYDRUS1D.exe")
 
-NODE_SERVER_URL = "http://localhost:5000"  # Node.js backend URL
-#RESULTS_FILE = os.path.join(PROJECT_DIR, "Results.out")  # Ensure HYDRUS writes here
-
 def is_admin():
-    """ Checks if the script is running with admin privileges. """
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
+    except Exception as e:
+        print("Error checking admin privileges:", e)
         return False
 
-def restart_as_admin():
-    """ Relaunches the script as Administrator and continues execution. """
-    print("Restarting HYDRUS script as Administrator...")
-    script = os.path.abspath(__file__)
-    subprocess.run(["powershell", "Start-Process", "python", f"'{script}'", "-Verb", "runAs"], shell=True)
-    sys.exit()
+# Option B: Instead of restarting, exit if not run as admin.
+if not is_admin():
+    print("ERROR: This script must be run as administrator. Please restart the Node server with elevated privileges.")
+    sys.exit(1)
 
-def get_user_input():
-    """ Asks the user for project details and port number. """
-    project_name = input("Enter project name: ").strip()
-    description = input("Enter project description: ").strip()
-    port_number = input("Enter sensor port number (1, 2, or 3): ").strip()
-
-    if port_number not in ["1", "2", "3"]:
-        print("Invalid port number. Use 1, 2, or 3.")
+def get_arguments():
+    if len(sys.argv) < 3:
+        print("Usage: run_hydrus.py <port_number> <sensor_data_json>")
         sys.exit(1)
-
-    project_path = os.path.join(Projects_DIR, project_name)
-    os.makedirs(project_path, exist_ok=True)
-    return project_name, description, port_number, project_path
-
-def fetch_sensor_data(port_number):
-    """ Fetches sensor data from Node.js backend API instead of connecting to the database directly. """
+    port_number = sys.argv[1]
+    sensor_data_json = sys.argv[2]
     try:
-        response = requests.get(f"{NODE_SERVER_URL}/api/sensor/{port_number}")
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching sensor data: {e}")
+        sensor_data = json.loads(sensor_data_json)
+    except Exception as e:
+        print("Invalid sensor data JSON:", e)
         sys.exit(1)
+    # Generate a unique project name using the port number and current timestamp.
+    project_name = f"Project_{port_number}_{int(time.time())}"
+    return project_name, port_number, sensor_data
 
 def generate_selector_file(project_path, sensor_data):
-    """ Generates the Selector.in file for HYDRUS. """
-    selector_file = os.path.join(project_path, "Selector.in")
+    selector_file = os.path.join(project_path, "InputSelector.txt")
     with open(selector_file, "w") as file:
         file.write(f"{sensor_data['water_content']} {sensor_data['soil_temp']} {sensor_data['bulk_ec']}\n")
-    print(f"Selector.in file generated at {selector_file}")
+    print(f"InputSelector.txt generated at {selector_file}")
+    return selector_file
 
 def run_hydrus(project_path):
-    """ Runs HYDRUS-1D inside the project directory. """
     print(f"Running HYDRUS in: {project_path}")
     process = subprocess.Popen(
         [hydrus_exe_path],
         cwd=project_path,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        shell=True
+        stderr=subprocess.PIPE
     )
-
     stdout, stderr = process.communicate()
-
     if stdout:
         print(f"HYDRUS Output: {stdout.decode()}")
     if stderr:
         print(f"HYDRUS Error: {stderr.decode()}")
-
     results_file = os.path.join(project_path, "Results.out")
-    for _ in range(15):  # Wait up to 15 seconds
+    for _ in range(15):  # Wait up to 15 seconds for Results.out to appear
         if os.path.exists(results_file):
             print("Results.out detected!")
             return results_file
@@ -84,39 +68,32 @@ def run_hydrus(project_path):
     print("Error: HYDRUS did not generate Results.out.")
     sys.exit(1)
 
-def process_results(results_file):
-    """ Extracts and visualizes HYDRUS results. """
+def process_results(results_file, project_path):
     try:
         with open(results_file, "r") as file:
             lines = file.readlines()
-        
-        # Assume data is structured in columns (modify based on actual format)
-        data = [list(map(float, line.strip().split())) for line in lines if line.strip()]
-        time_steps = [row[0] for row in data]  # First column as time
-        moisture_levels = [row[1] for row in data]  # Second column as moisture content
-
-        # Plot results
+        # Example parsing logic; adjust based on your actual results file format.
+        data = [line.strip().split() for line in lines if line.strip()]
+        time_steps = [row[0] for row in data]
+        moisture_levels = [row[1] for row in data]
         plt.figure(figsize=(10, 5))
         plt.plot(time_steps, moisture_levels, marker='o', linestyle='-')
         plt.xlabel("Time Steps")
         plt.ylabel("Moisture Content")
         plt.title("HYDRUS Simulation Results")
         plt.grid(True)
-        plt.savefig("hydrus_results.png")  # Save the plot
+        plt.savefig(os.path.join(project_path, "hydrus_results.png"))
         plt.show()
-
         print("Graph generated successfully!")
-
     except Exception as e:
         print(f"Error processing results: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
-    if not is_admin():
-        restart_as_admin()
-
-    project_name, description, port_number, project_path = get_user_input()
-    sensor_data = fetch_sensor_data(port_number)  # Fetch data from Node.js API
+    project_name, port_number, sensor_data = get_arguments()
+    project_path = os.path.join(PROJECTS_DIR, project_name)
+    os.makedirs(project_path, exist_ok=True)
     generate_selector_file(project_path, sensor_data)
     results_file = run_hydrus(project_path)
-    process_results(results_file)
+    print(results_file)  # Print the path to Results.out so the caller can use it.
+    process_results(results_file, project_path)

@@ -1,8 +1,10 @@
 import express from 'express';
-import { getSensorData } from '../controllers/sensorsController.js';
+import { getSensorDataPort1, getSensorDataPort2, getSensorDataPort3 } from '../controllers/sensorsController.js';
 
 const router = express.Router();
 
-router.get('/:port', getSensorData); // Fetch data for a specific port
+router.get('/port1', getSensorDataPort1);
+router.get('/port2', getSensorDataPort2);
+router.get('/port3', getSensorDataPort3);
 
 export default router;
